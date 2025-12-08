@@ -1,24 +1,27 @@
 from __future__ import annotations
 
-"""Simple FastAPI chatbot backed by a demo Chroma vector store."""
+"""Simple FastAPI chatbot backed by a Chroma vector store."""
 
 import importlib
 import os
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import posthog
 from chromadb.config import Settings
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse
-from langchain_community.embeddings import FakeEmbeddings
+from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader, TextLoader
+from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
+from langchain_openai import OpenAIEmbeddings
 
 # Silence telemetry calls that rely on networked analytics backends.
 posthog.capture = lambda *_, **__: None
 
-CLIENT_SETTINGS = Settings(anonymized_telemetry=False)
 MODEL_CATALOG = {
     "meta-llama/Llama-3.2-1B-Instruct-QLORA_INT4_EO8": "Quantized 1B instruct (int4)",
     "meta-llama/Llama-3.1-8B": "Standard 8B instruct",
@@ -26,16 +29,105 @@ MODEL_CATALOG = {
 DEFAULT_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct-QLORA_INT4_EO8"
 
 
-def build_vector_store() -> Chroma:
-    """Create a simple Chroma vector store populated with demo documents."""
-    documents = [
-        Document(page_content="LangChain streamlines building LLM-powered apps."),
-        Document(page_content="Chroma provides a developer-friendly vector database."),
-        Document(page_content="Containers make it easy to run code the same way everywhere."),
+def resolve_embeddings() -> Any:
+    """Pick an embedding model based on environment configuration."""
+
+    provider = os.getenv("EMBEDDING_PROVIDER", "sentence_transformer").lower()
+    model_name = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is required when EMBEDDING_PROVIDER=openai")
+
+        return OpenAIEmbeddings(model=model_name, api_key=api_key)
+
+    return SentenceTransformerEmbeddings(model_name=model_name)
+
+
+def load_documents(data_path: str) -> list[Document]:
+    """Load documents from disk to populate the vector store."""
+
+    base_path = Path(data_path)
+    if not base_path.exists():
+        return []
+
+    loaders = [
+        DirectoryLoader(str(base_path), glob="**/*.md", loader_cls=TextLoader),
+        DirectoryLoader(str(base_path), glob="**/*.txt", loader_cls=TextLoader),
+        DirectoryLoader(str(base_path), glob="**/*.pdf", loader_cls=PyPDFLoader),
     ]
 
-    embeddings = FakeEmbeddings(size=32)
-    return Chroma.from_documents(documents, embeddings, client_settings=CLIENT_SETTINGS)
+    documents: list[Document] = []
+    for loader in loaders:
+        documents.extend(loader.load())
+
+    for doc in documents:
+        source = doc.metadata.get("source")
+        if source:
+            path = Path(source)
+            doc.metadata["basename"] = path.name
+            doc.metadata["source_dir"] = str(path.parent)
+
+    return documents
+
+
+def build_chroma_settings(persist_directory: str, server_url: str | None) -> Settings:
+    """Configure Chroma to persist locally or talk to a remote server."""
+
+    if server_url:
+        parsed = urlparse(server_url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if not host:
+            raise ValueError("CHROMA_SERVER_URL must include a hostname")
+
+        return Settings(
+            anonymized_telemetry=False,
+            chroma_api_impl="rest",
+            chroma_server_host=host,
+            chroma_server_http_port=port,
+            chroma_server_ssl=parsed.scheme == "https",
+        )
+
+    return Settings(anonymized_telemetry=False, persist_directory=persist_directory)
+
+
+def build_vector_store() -> Chroma:
+    """Create a Chroma vector store populated with repository documents."""
+
+    data_path = os.getenv("DATA_PATH", "data")
+    distance_metric = os.getenv("CHROMA_DISTANCE_METRIC", "cosine")
+    persist_directory = os.getenv("CHROMA_PERSIST_DIR", "chroma_db")
+    server_url = os.getenv("CHROMA_SERVER_URL")
+
+    documents = load_documents(data_path)
+    if not documents:
+        documents = [
+            Document(
+                page_content=(
+                    "No documents were loaded. Add Markdown, text, or PDF files under "
+                    f"'{data_path}' to ground responses."
+                ),
+                metadata={"source": "bootstrap", "basename": "bootstrap"},
+            )
+        ]
+
+    embeddings = resolve_embeddings()
+    client_settings = build_chroma_settings(persist_directory, server_url)
+
+    vector_store = Chroma.from_documents(
+        documents,
+        embeddings,
+        client_settings=client_settings,
+        collection_name="langchain-agent-docs",
+        collection_metadata={"hnsw:space": distance_metric},
+    )
+
+    if not server_url:
+        vector_store.persist()
+
+    return vector_store
 
 
 def ensure_docker_runtime() -> None:
@@ -91,7 +183,8 @@ def build_prompt() -> PromptTemplate:
 
 ensure_docker_runtime()
 vector_store = build_vector_store()
-retriever = vector_store.as_retriever(search_kwargs={"k": 2})
+retriever_k = int(os.getenv("RETRIEVER_K", "4"))
+retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": retriever_k})
 chat_prompt = build_prompt()
 model_name, vllm_llm = load_vllm_model()
 
