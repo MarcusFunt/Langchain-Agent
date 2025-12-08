@@ -33,6 +33,25 @@ Key configuration options (all via environment variables):
 - `CHROMA_SERVER_URL`: Point Chroma to an external server (e.g., `http://chroma:8000`); overrides local persistence.
 - `CHROMA_DISTANCE_METRIC`: Similarity metric for the collection (e.g., `cosine`, `l2`, `ip`).
 - `RETRIEVER_K`: Number of documents to inject into the prompt (default: `4`).
+- `SYSTEM_PROMPT`: System-level instruction prepended to every conversation (default: concise assistant grounded in retrieved snippets).
+- `PERSONA_PROMPT`: Optional persona block included ahead of user turns. Can also be provided per-request via the UI settings field.
+- `MEMORY_TOKEN_LIMIT`: Token budget for the conversational memory buffer per session (default: `2048`).
+
+## Personas and system prompt
+
+The model receives a system prompt followed by an optional persona block before the user message. Configure them with environment variables when starting the service:
+
+```bash
+SYSTEM_PROMPT="You are a witty container expert." \
+PERSONA_PROMPT="Respond as a friendly DevOps mentor." \
+python main.py
+```
+
+The UI also exposes a **Persona** text field. The value is stored locally (via `localStorage`) and sent with each `/api/chat` request so you can experiment without restarting the server. Leave it empty to fall back to `PERSONA_PROMPT` or omit persona altogether.
+
+## Session continuity
+
+The frontend now creates a persistent session identifier (saved to `localStorage`) and sends it alongside each chat request. The backend keeps a token-limited `ConversationTokenBufferMemory` per session ID so conversations stay contextual while trimming older turns to respect the configured token budget. Clearing browser storage or supplying a new session ID starts a fresh history.
 
 ## Build and run with Docker (required path for deployment)
 
