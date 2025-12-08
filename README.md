@@ -72,22 +72,33 @@ The frontend now creates a persistent session identifier (saved to `localStorage
 
 ## Build and run with Docker (required path for deployment)
 
-Build the container:
+Generate your environment file and build the image:
 
 ```bash
-docker build -t langchain-agent .
+cp .env.example .env
+make build
 ```
 
-Run it:
+Run it (Ctrl+C to stop):
 
 ```bash
-docker run --rm -p 8000:8000 \
-  -e VLLM_MODEL_ID="meta-llama/Llama-3.1-8B" \
-  langchain-agent
+make run
+```
+
+To rebuild and restart in one shot:
+
+```bash
+make dev
 ```
 
 With the container running, open [http://localhost:8000](http://localhost:8000) to access the web UI backed by the local FastAPI server.
 
-vLLM is no longer optional: the app will refuse to start unless the dependency
-is available and one of the approved model identifiers is provided (or the
-default is used).
+### Optional external Chroma server
+
+The included `docker-compose.yml` defines a Chroma service you can opt into with Compose profiles. Enable it and point the API at it by setting `CHROMA_SERVER_URL=http://chroma:8000` in your `.env`, then start with the profile:
+
+```bash
+docker compose --profile chroma up
+```
+
+vLLM is no longer optional: the app will refuse to start unless the dependency is available and one of the approved model identifiers is provided (or the default is used).
