@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import posthog
 from chromadb.config import Settings
 from fastapi import Body, FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader, TextLoader
 from langchain_community.embeddings import SentenceTransformerEmbeddings
@@ -229,6 +229,9 @@ async def index() -> str:
             button { background: linear-gradient(135deg, #06b6d4, #38bdf8); border: none; color: #0b1220; font-weight: 700; border-radius: 10px; padding: 0 18px; cursor: pointer; min-width: 88px; }
             button:disabled { opacity: 0.55; cursor: not-allowed; }
             .meta { color: var(--muted); font-size: 13px; }
+            .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #38bdf8; border-top-color: transparent; display: inline-block; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+            .status { color: #fbbf24; font-size: 13px; }
+            @keyframes spin { to { transform: rotate(360deg); } }
         </style>
     </head>
     <body>
@@ -284,6 +287,29 @@ async def index() -> str:
                 bubble.textContent = text;
                 messages.appendChild(bubble);
                 messages.scrollTop = messages.scrollHeight;
+                return bubble;
+            }
+
+            function createStreamBubble() {
+                const bubble = document.createElement('div');
+                bubble.className = 'bubble bot';
+                const spinner = document.createElement('span');
+                spinner.className = 'spinner';
+                const textSpan = document.createElement('span');
+                textSpan.className = 'stream-text';
+                bubble.appendChild(spinner);
+                bubble.appendChild(textSpan);
+                messages.appendChild(bubble);
+                messages.scrollTop = messages.scrollHeight;
+                return { bubble, spinner, textSpan };
+            }
+
+            function setStatus(message) {
+                const status = document.createElement('div');
+                status.className = 'status';
+                status.textContent = message;
+                messages.appendChild(status);
+                messages.scrollTop = messages.scrollHeight;
             }
 
             async function sendMessage(evt) {
@@ -293,20 +319,70 @@ async def index() -> str:
                 addBubble(content, 'user');
                 textarea.value = '';
 
+                const { bubble, spinner, textSpan } = createStreamBubble();
+                const controller = new AbortController();
+                let accumulated = '';
+                let buffer = '';
+                const decoder = new TextDecoder();
+                const timeout = setTimeout(() => controller.abort(), 90000);
+
                 try {
                     const res = await fetch('/api/chat', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'text/event-stream'
+                        },
                         body: JSON.stringify({
                             message: content,
                             session_id: getSessionId(),
                             persona: getPersona()
-                        })
+                        }),
+                        signal: controller.signal
                     });
-                    const data = await res.json();
-                    addBubble(data.reply);
+
+                    if (!res.ok || !res.body) {
+                        throw new Error('Network response was not OK');
+                    }
+
+                    const reader = res.body.getReader();
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const events = buffer.split('\n\n');
+                        buffer = events.pop();
+
+                        for (const evt of events) {
+                            const line = evt.trim();
+                            if (!line.startsWith('data: ')) continue;
+                            const payload = line.slice(6);
+                            if (payload === '[DONE]') {
+                                spinner.remove();
+                                return;
+                            }
+                            accumulated += payload;
+                            textSpan.textContent = accumulated;
+                            messages.scrollTop = messages.scrollHeight;
+                        }
+                    }
+
+                    if (buffer) {
+                        const payload = buffer.replace(/^data: /, '').trim();
+                        if (payload && payload !== '[DONE]') {
+                            accumulated += payload;
+                            textSpan.textContent = accumulated;
+                        }
+                    }
                 } catch (err) {
-                    addBubble('Sorry, something went wrong.');
+                    if (spinner.isConnected) spinner.remove();
+                    bubble.classList.add('bot');
+                    textSpan.textContent = accumulated || 'Connection dropped. Please try again.';
+                    setStatus('Streaming interrupted: ' + (err?.message || 'unknown error'));
+                } finally {
+                    clearTimeout(timeout);
+                    if (spinner.isConnected) spinner.remove();
+                    messages.scrollTop = messages.scrollHeight;
                 }
             }
 
@@ -361,8 +437,8 @@ def build_history_block(messages: list[Any]) -> str:
     return "\n".join(lines)
 
 
-def build_response(message: str, session_id: str, persona: str | None = None) -> str:
-    """Generate an answer from retrieved context using the configured vLLM model."""
+def build_response(message: str, session_id: str, persona: str | None = None):
+    """Stream an answer using the vLLM streaming API, yielding tokens incrementally."""
 
     if not vllm_llm:
         raise RuntimeError(
@@ -382,21 +458,39 @@ def build_response(message: str, session_id: str, persona: str | None = None) ->
         history=history_block,
         question=message,
     )
-    reply = vllm_llm.invoke(prompt)
+
+    reply_tokens: list[str] = []
+    for chunk in vllm_llm.stream(prompt):
+        token = chunk if isinstance(chunk, str) else getattr(chunk, "text", str(chunk))
+        reply_tokens.append(token)
+        yield token
+
+    full_reply = "".join(reply_tokens).strip()
     session_memory.save_context(
         {"question": message},
-        {"response": reply},
+        {"response": full_reply},
     )
-    return reply.strip()
 
 
 @app.post("/api/chat")
-async def chat(payload: ChatRequest = Body(...)) -> dict[str, str]:
-    """Handle chat messages from the UI."""
+async def chat(payload: ChatRequest = Body(...)) -> StreamingResponse:
+    """Handle chat messages from the UI via Server-Sent Events."""
 
     session_id = payload.session_id or "default"
-    reply = build_response(payload.message, session_id, payload.persona or DEFAULT_PERSONA_PROMPT)
-    return {"reply": reply, "model": model_name}
+    persona = payload.persona or DEFAULT_PERSONA_PROMPT
+
+    def event_stream():
+        for token in build_response(payload.message, session_id, persona):
+            yield f"data: {token}\n\n"
+        yield f"data: [DONE]\n\n"
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
 
 
 if __name__ == "__main__":
