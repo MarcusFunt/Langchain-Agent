@@ -1,11 +1,22 @@
 # Langchain-Agent
 
-This repository includes a simple example that builds a Docker container with LangChain and Chroma installed. The default entrypoint runs a small script that seeds an in-memory Chroma vector store, performs a similarity search, and can optionally load a model through the vLLM integration.
+This repository now exposes a tiny chatbot UI powered by LangChain, Chroma, and an optional vLLM-backed model. It runs a FastAPI app that serves a minimal chat window and responds with answers grounded in a small in-memory vector store.
 
 ## Requirements
-- Docker
+- Docker (for container builds)
+- Python 3.11+ with the packages from `requirements.txt`
 
-## Build and run
+## Run locally
+Install dependencies and start the FastAPI server:
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+Then open [http://localhost:8000](http://localhost:8000) to chat.
+
+## Build and run with Docker
 
 Build the container:
 
@@ -16,7 +27,7 @@ docker build -t langchain-agent .
 Run it:
 
 ```bash
-docker run --rm langchain-agent
+docker run --rm -p 8000:8000 langchain-agent
 ```
 
 ### Optional: load a model with vLLM
@@ -25,13 +36,7 @@ If you want to make a locally-hosted model available through vLLM, install the o
 
 ```bash
 pip install -r requirements-vllm.txt
-docker run --rm -e VLLM_MODEL_ID="TheBloke/Mistral-7B-Instruct-v0.2-GPTQ" langchain-agent
+VLLM_MODEL_ID="TheBloke/Mistral-7B-Instruct-v0.2-GPTQ" python main.py
 ```
 
-When the variable is set, the container will instantiate a `VLLM` instance before running the vector store example.
-
-You should see output similar to:
-
-```
-Result 1: LangChain streamlines building LLM-powered apps.
-```
+When the variable is set, the app will instantiate a `VLLM` instance before running the vector store example. You should see a notice in the logs that the model loaded successfully.
