@@ -12,9 +12,12 @@ import posthog
 from chromadb.config import Settings
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader, TextLoader
 from langchain_community.embeddings import SentenceTransformerEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain.memory import ConversationTokenBufferMemory
+from langchain.schema import AIMessage, HumanMessage, SystemMessage
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import OpenAIEmbeddings
@@ -27,6 +30,8 @@ MODEL_CATALOG = {
     "meta-llama/Llama-3.1-8B": "Standard 8B instruct",
 }
 DEFAULT_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct-QLORA_INT4_EO8"
+DEFAULT_SYSTEM_PROMPT = "You are a concise assistant who answers using the provided snippets."
+DEFAULT_PERSONA_PROMPT = os.getenv("PERSONA_PROMPT", "")
 
 
 def resolve_embeddings() -> Any:
@@ -176,8 +181,7 @@ def build_prompt() -> PromptTemplate:
     """Create a simple prompt that injects retrieved context."""
 
     return PromptTemplate.from_template(
-        """You are a concise assistant who answers using the provided snippets.\n"
-        "Context:\n{context}\n\nQuestion: {question}\nAnswer:"""
+        """{system_prompt}\n{persona_block}Context:\n{context}\n\nConversation so far:\n{history}\n\nQuestion: {question}\nAnswer:"""
     )
 
 
@@ -187,6 +191,9 @@ retriever_k = int(os.getenv("RETRIEVER_K", "4"))
 retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": retriever_k})
 chat_prompt = build_prompt()
 model_name, vllm_llm = load_vllm_model()
+system_prompt = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+memory_token_limit = int(os.getenv("MEMORY_TOKEN_LIMIT", "2048"))
+_session_memories: dict[str, ConversationTokenBufferMemory] = {}
 
 app = FastAPI(title="LangChain Chatbot")
 
@@ -209,8 +216,11 @@ async def index() -> str:
             header { padding: 16px 20px; border-bottom: 1px solid #1f2937; display: flex; align-items: center; gap: 12px; }
             header h1 { margin: 0; font-size: 20px; letter-spacing: 0.4px; }
             main { display: flex; justify-content: center; padding: 24px; }
-            .chat { width: min(820px, 100%); background: var(--panel); border: 1px solid #1f2937; border-radius: 14px; overflow: hidden; display: grid; grid-template-rows: 1fr auto; min-height: 72vh; }
+            .chat { width: min(820px, 100%); background: var(--panel); border: 1px solid #1f2937; border-radius: 14px; overflow: hidden; display: grid; grid-template-rows: auto 1fr auto; min-height: 72vh; }
             .messages { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+            .settings { padding: 12px 16px; border-bottom: 1px solid #1f2937; display: flex; align-items: center; gap: 10px; background: #0b1220; }
+            .settings label { color: var(--muted); font-size: 14px; }
+            .settings input { flex: 1; padding: 10px; border-radius: 10px; border: 1px solid #1f2937; background: #0f172a; color: var(--text); }
             .bubble { padding: 12px 14px; border-radius: 12px; line-height: 1.5; max-width: 92%; white-space: pre-wrap; }
             .user { align-self: flex-end; background: #1f2937; border: 1px solid #22d3ee44; }
             .bot { align-self: flex-start; background: #0b2530; border: 1px solid #0ea5e9; }
@@ -231,8 +241,12 @@ async def index() -> str:
         </header>
         <main>
             <section class=\"chat\">
+                <div class=\"settings\">
+                    <label for=\"persona\">Persona</label>
+                    <input id=\"persona\" name=\"persona\" placeholder=\"Optional tone or role...\" />
+                </div>
                 <div id=\"messages\" class=\"messages\"></div>
-                <form id=\"chat-form\"> 
+                <form id=\"chat-form\">
                     <textarea id=\"message\" placeholder=\"Ask me anything...\" required></textarea>
                     <button type=\"submit\">Send</button>
                 </form>
@@ -242,6 +256,27 @@ async def index() -> str:
             const form = document.getElementById('chat-form');
             const textarea = document.getElementById('message');
             const messages = document.getElementById('messages');
+            const personaInput = document.getElementById('persona');
+
+            const SESSION_KEY = 'langchain-agent-session';
+            const PERSONA_KEY = 'langchain-agent-persona';
+
+            function getSessionId() {
+                let sid = localStorage.getItem(SESSION_KEY);
+                if (!sid) {
+                    sid = crypto.randomUUID();
+                    localStorage.setItem(SESSION_KEY, sid);
+                }
+                return sid;
+            }
+
+            function getPersona() {
+                return localStorage.getItem(PERSONA_KEY) || '';
+            }
+
+            function persistPersona(value) {
+                localStorage.setItem(PERSONA_KEY, value.trim());
+            }
 
             function addBubble(text, type = 'bot') {
                 const bubble = document.createElement('div');
@@ -262,7 +297,11 @@ async def index() -> str:
                     const res = await fetch('/api/chat', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ message: content })
+                        body: JSON.stringify({
+                            message: content,
+                            session_id: getSessionId(),
+                            persona: getPersona()
+                        })
                     });
                     const data = await res.json();
                     addBubble(data.reply);
@@ -272,6 +311,10 @@ async def index() -> str:
             }
 
             form.addEventListener('submit', sendMessage);
+            personaInput.value = getPersona();
+            personaInput.addEventListener('input', (evt) => {
+                persistPersona(evt.target.value);
+            });
             addBubble('Hi! I am a tiny LangChain agent. Ask me something about the demo context.');
         </script>
     </body>
@@ -279,7 +322,46 @@ async def index() -> str:
     """
 
 
-def build_response(message: str) -> str:
+class ChatRequest(BaseModel):
+    """Request payload for chat messages."""
+
+    message: str
+    session_id: str | None = None
+    persona: str | None = None
+
+
+def get_session_memory(session_id: str) -> ConversationTokenBufferMemory:
+    """Return the session-scoped memory, creating one when necessary."""
+
+    if session_id not in _session_memories:
+        _session_memories[session_id] = ConversationTokenBufferMemory(
+            llm=vllm_llm,
+            return_messages=True,
+            memory_key="history",
+            input_key="question",
+            output_key="response",
+            max_token_limit=memory_token_limit,
+        )
+    return _session_memories[session_id]
+
+
+def build_history_block(messages: list[Any]) -> str:
+    """Render structured prior turns for the prompt."""
+
+    lines: list[str] = []
+    for msg in messages:
+        if isinstance(msg, SystemMessage):
+            lines.append(f"System: {msg.content}")
+        elif isinstance(msg, HumanMessage):
+            lines.append(f"User: {msg.content}")
+        elif isinstance(msg, AIMessage):
+            lines.append(f"Assistant: {msg.content}")
+        else:
+            lines.append(str(msg))
+    return "\n".join(lines)
+
+
+def build_response(message: str, session_id: str, persona: str | None = None) -> str:
     """Generate an answer from retrieved context using the configured vLLM model."""
 
     if not vllm_llm:
@@ -287,18 +369,33 @@ def build_response(message: str) -> str:
             "vLLM must be configured. Ensure requirements are installed and a model id is set."
         )
 
+    session_memory = get_session_memory(session_id)
     docs = retriever.get_relevant_documents(message)
     context = format_docs(docs) if docs else ""
-    prompt = chat_prompt.format(context=context, question=message)
+    persona_block = f"Persona: {persona}\n" if persona else ""
+    history_messages = session_memory.load_memory_variables({}).get("history", [])
+    history_block = build_history_block(history_messages)
+    prompt = chat_prompt.format(
+        system_prompt=system_prompt,
+        persona_block=persona_block,
+        context=context,
+        history=history_block,
+        question=message,
+    )
     reply = vllm_llm.invoke(prompt)
+    session_memory.save_context(
+        {"question": message},
+        {"response": reply},
+    )
     return reply.strip()
 
 
 @app.post("/api/chat")
-async def chat(message: str = Body(embed=True)) -> dict[str, str]:
+async def chat(payload: ChatRequest = Body(...)) -> dict[str, str]:
     """Handle chat messages from the UI."""
 
-    reply = build_response(message)
+    session_id = payload.session_id or "default"
+    reply = build_response(payload.message, session_id, payload.persona or DEFAULT_PERSONA_PROMPT)
     return {"reply": reply, "model": model_name}
 
 
