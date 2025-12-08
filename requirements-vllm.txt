@@ -1,0 +1,2 @@
+# Optional dependency for running LangChain with vLLM-backed models
+vllm==0.6.6
