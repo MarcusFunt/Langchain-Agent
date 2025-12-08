@@ -1,6 +1,17 @@
 # Langchain-Agent
 
-This repository now exposes a tiny chatbot UI powered by LangChain, Chroma, and an optional vLLM-backed model. It runs a FastAPI app that serves a minimal chat window and responds with answers grounded in a persisted Chroma vector store populated from local Markdown, text, or PDF files.
+Langchain-Agent is a work-in-progress AI copilot for writing, brainstorming, and rapid research. The stack runs entirely as a local web app backed by a FastAPI server and LangChain pipeline packaged in Docker so you can spin up the experience with a single container. Conversations are grounded in a persisted Chroma vector store built from your local Markdown, text, or PDF files, and responses stream through vLLM-hosted models to keep interactions fast and contextual.
+
+## Project scope and roadmap
+
+- **Core experience:** Deliver a reliable local-first chatbot UI reachable in the browser at `http://localhost:8000` when the Docker container is running. Users can upload or point the service at documents, then chat with an assistant that retrieves relevant passages and streams answers.
+- **Model flexibility:** Prioritize strong on-device defaults while allowing easy switches between supported vLLM models via environment variables. Future iterations should expand the approved model list and add graceful fallbacks when hardware is limited.
+- **Retrieval quality:** Maintain high-quality embeddings, configurable distance metrics, and tunable retriever parameters so the agent can balance precision and recall for different writing or ideation tasks.
+- **Persona controls:** Keep both global (env-based) and per-session persona controls so users can experiment with tone and style without restarts.
+- **Session management:** Persist session identifiers in the browser and keep token-budgeted conversation memory on the server so context survives across turns without unbounded growth.
+- **Deployment path:** Optimize for Docker-first usage with sensible defaults, health checks, and logs that make it straightforward to run locally or behind reverse proxies. A production-hardened image with minimal size and faster cold starts is a near-term goal.
+- **Observability and resilience:** Add structured logging, surface streaming failures clearly in the UI, and plan for metrics and tracing to make the agent reliable under long-running workloads.
+- **Extensibility:** Keep the codebase modular so new tools (e.g., web search, code execution, citation formatting) can plug into the pipeline without destabilizing the core chat flow.
 
 ## Requirements
 - Docker (mandatory runtime environment)
@@ -74,6 +85,8 @@ docker run --rm -p 8000:8000 \
   -e VLLM_MODEL_ID="meta-llama/Llama-3.1-8B" \
   langchain-agent
 ```
+
+With the container running, open [http://localhost:8000](http://localhost:8000) to access the web UI backed by the local FastAPI server.
 
 vLLM is no longer optional: the app will refuse to start unless the dependency
 is available and one of the approved model identifiers is provided (or the
