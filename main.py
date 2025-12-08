@@ -19,6 +19,11 @@ from langchain_core.prompts import PromptTemplate
 posthog.capture = lambda *_, **__: None
 
 CLIENT_SETTINGS = Settings(anonymized_telemetry=False)
+MODEL_CATALOG = {
+    "meta-llama/Llama-3.2-1B-Instruct-QLORA_INT4_EO8": "Quantized 1B instruct (int4)",
+    "meta-llama/Llama-3.1-8B": "Standard 8B instruct",
+}
+DEFAULT_MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct-QLORA_INT4_EO8"
 
 
 def build_vector_store() -> Chroma:
@@ -33,22 +38,34 @@ def build_vector_store() -> Chroma:
     return Chroma.from_documents(documents, embeddings, client_settings=CLIENT_SETTINGS)
 
 
-def load_vllm_model(model_id: str | None = None) -> tuple[str, Any] | tuple[None, None]:
-    """Instantiate a vLLM-backed model when a model ID is provided.
+def ensure_docker_runtime() -> None:
+    """Fail fast when the service is not running inside a container."""
+
+    if not os.path.exists("/.dockerenv"):
+        raise RuntimeError(
+            "Docker is required. Please run the service inside the provided container image."
+        )
+
+
+def load_vllm_model(model_id: str | None = None) -> tuple[str, Any]:
+    """Instantiate a vLLM-backed model using one of the approved Hugging Face IDs.
 
     The function looks for the provided ``model_id`` first and falls back to the
-    ``VLLM_MODEL_ID`` environment variable. It returns ``(None, None)`` when no
-    model should be loaded so the rest of the script can proceed without GPU
-    requirements.
+    ``VLLM_MODEL_ID`` environment variable or the default quantized model. It
+    raises errors when vLLM is unavailable or when an unsupported identifier is
+    provided to ensure GPU-backed inference is always configured.
     """
 
-    selected_model = model_id or os.getenv("VLLM_MODEL_ID")
-    if not selected_model:
-        return None, None
+    selected_model = model_id or os.getenv("VLLM_MODEL_ID") or DEFAULT_MODEL_ID
+
+    if selected_model not in MODEL_CATALOG:
+        raise ValueError(
+            "Unsupported model id. Choose one of: " + ", ".join(MODEL_CATALOG)
+        )
 
     if importlib.util.find_spec("langchain_community.llms.vllm") is None:
         raise ImportError(
-            "vLLM support requires installing the optional `vllm` dependency."
+            "vLLM is required. Install dependencies from requirements.txt before running."
         )
 
     from langchain_community.llms import VLLM
@@ -72,6 +89,7 @@ def build_prompt() -> PromptTemplate:
     )
 
 
+ensure_docker_runtime()
 vector_store = build_vector_store()
 retriever = vector_store.as_retriever(search_kwargs={"k": 2})
 chat_prompt = build_prompt()
@@ -169,22 +187,18 @@ async def index() -> str:
 
 
 def build_response(message: str) -> str:
-    """Generate an answer from retrieved context or a vLLM model."""
+    """Generate an answer from retrieved context using the configured vLLM model."""
+
+    if not vllm_llm:
+        raise RuntimeError(
+            "vLLM must be configured. Ensure requirements are installed and a model id is set."
+        )
 
     docs = retriever.get_relevant_documents(message)
     context = format_docs(docs) if docs else ""
-
-    if vllm_llm:
-        prompt = chat_prompt.format(context=context, question=message)
-        reply = vllm_llm.invoke(prompt)
-        return reply.strip()
-
-    if context:
-        return (
-            "Here's what I found:\n" + context + "\n\n" + "I hope that helps!"
-        )
-
-    return "I'm not sure yet, but I'll learn more soon."
+    prompt = chat_prompt.format(context=context, question=message)
+    reply = vllm_llm.invoke(prompt)
+    return reply.strip()
 
 
 @app.post("/api/chat")
