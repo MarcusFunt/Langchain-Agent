@@ -49,6 +49,12 @@ python main.py
 
 The UI also exposes a **Persona** text field. The value is stored locally (via `localStorage`) and sent with each `/api/chat` request so you can experiment without restarting the server. Leave it empty to fall back to `PERSONA_PROMPT` or omit persona altogether.
 
+## Streaming responses
+
+The `/api/chat` endpoint streams tokens via Server-Sent Events (SSE) using vLLM's streaming API. The browser client consumes the stream with the Fetch API and updates the assistant bubble as tokens arrive while showing a spinner. If the connection drops or times out (after ~90 seconds), the UI surfaces a warning and keeps partial output.
+
+SSE is widely supported in evergreen browsers. Legacy Edge and very old mobile browsers may not fully support streaming Fetch; for those environments, prefer modern Chromium/Firefox/Safari or fall back to the non-streaming JSON flow by adapting the client.
+
 ## Session continuity
 
 The frontend now creates a persistent session identifier (saved to `localStorage`) and sends it alongside each chat request. The backend keeps a token-limited `ConversationTokenBufferMemory` per session ID so conversations stay contextual while trimming older turns to respect the configured token budget. Clearing browser storage or supplying a new session ID starts a fresh history.
