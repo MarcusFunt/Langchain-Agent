@@ -9,9 +9,17 @@ Langchain-Agent is a FastAPI chatbot powered by a LangChain pipeline, a Chroma v
 ## One-step setup
 Run the installer once to create a virtual environment, install every dependency (including vLLM), and generate a default `.env`:
 
-```bash
-./install.sh
-```
+- Linux/macOS (Bash):
+
+  ```bash
+  ./install.sh
+  ```
+
+- Windows (PowerShell):
+
+  ```powershell
+  ./install.ps1
+  ```
 
 When the script finishes it will print the command to start the app. By default it creates:
 - `.venv/` with all Python packages
@@ -22,11 +30,25 @@ When the script finishes it will print the command to start the app. By default 
 ## Start the app
 Activate the environment, load the `.env`, and launch the FastAPI server:
 
-```bash
-source .venv/bin/activate
-set -a; source .env; set +a
-python main.py
-```
+- Linux/macOS (Bash):
+
+  ```bash
+  source .venv/bin/activate
+  set -a; source .env; set +a
+  python main.py
+  ```
+
+- Windows (PowerShell):
+
+  ```powershell
+  .\.venv\Scripts\Activate.ps1
+  Get-Content .env | ForEach-Object {
+    if ($_ -match '^(.*)=(.*)$') {
+      Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+    }
+  }
+  python main.py
+  ```
 
 Open [http://localhost:8000](http://localhost:8000) to chat.
 
