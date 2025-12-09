@@ -52,6 +52,12 @@ Activate the environment, load the `.env`, and launch the FastAPI server:
 
 Open [http://localhost:8000](http://localhost:8000) to chat.
 
+### Frontend-only mode
+If you only need the UI while iterating on styles or layout, skip the heavy
+back-end dependencies by setting `FRONTEND_DEV_MODE=1` before launching the
+server. The chatbot endpoint will stream a lightweight mock response so the
+chat window still exercises its loading and rendering states.
+
 ## Configuration (edit `.env`)
 The installer writes a minimal `.env` file. Common tweaks:
 - `VLLM_MODEL_ID`: Hugging Face model to serve (default quantized 1B model)

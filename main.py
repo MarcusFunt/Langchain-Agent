@@ -25,6 +25,13 @@ from langchain_openai import OpenAIEmbeddings
 # Silence telemetry calls that rely on networked analytics backends.
 posthog.capture = lambda *_, **__: None
 
+FRONTEND_DEV_MODE = os.getenv("FRONTEND_DEV_MODE", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 MODEL_CATALOG = {
     "meta-llama/Llama-3.2-1B-Instruct-QLORA_INT4_EO8": "Quantized 1B instruct (int4)",
     "meta-llama/Llama-3.1-8B": "Standard 8B instruct",
@@ -185,15 +192,33 @@ def build_prompt() -> PromptTemplate:
     )
 
 
-ensure_docker_runtime()
-vector_store = build_vector_store()
-retriever_k = int(os.getenv("RETRIEVER_K", "4"))
-retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": retriever_k})
+if not FRONTEND_DEV_MODE:
+    ensure_docker_runtime()
+    vector_store = build_vector_store()
+    retriever_k = int(os.getenv("RETRIEVER_K", "4"))
+    retriever = vector_store.as_retriever(
+        search_type="similarity", search_kwargs={"k": retriever_k}
+    )
+    model_name, vllm_llm = load_vllm_model()
+else:
+    vector_store = None
+    retriever = None
+    model_name, vllm_llm = "frontend-dev", None
+
 chat_prompt = build_prompt()
-model_name, vllm_llm = load_vllm_model()
 system_prompt = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
 memory_token_limit = int(os.getenv("MEMORY_TOKEN_LIMIT", "2048"))
 _session_memories: dict[str, ConversationTokenBufferMemory] = {}
+
+
+class NullMemory:
+    """Simple stand-in memory for frontend-only development."""
+
+    def load_memory_variables(self, _: dict[str, Any]) -> dict[str, list[Any]]:
+        return {"history": []}
+
+    def save_context(self, *_: Any, **__: Any) -> None:
+        return None
 
 app = FastAPI(title="LangChain Chatbot")
 
@@ -410,14 +435,17 @@ def get_session_memory(session_id: str) -> ConversationTokenBufferMemory:
     """Return the session-scoped memory, creating one when necessary."""
 
     if session_id not in _session_memories:
-        _session_memories[session_id] = ConversationTokenBufferMemory(
-            llm=vllm_llm,
-            return_messages=True,
-            memory_key="history",
-            input_key="question",
-            output_key="response",
-            max_token_limit=memory_token_limit,
-        )
+        if FRONTEND_DEV_MODE:
+            _session_memories[session_id] = NullMemory()
+        else:
+            _session_memories[session_id] = ConversationTokenBufferMemory(
+                llm=vllm_llm,
+                return_messages=True,
+                memory_key="history",
+                input_key="question",
+                output_key="response",
+                max_token_limit=memory_token_limit,
+            )
     return _session_memories[session_id]
 
 
@@ -437,8 +465,21 @@ def build_history_block(messages: list[Any]) -> str:
     return "\n".join(lines)
 
 
+def mock_frontend_response(message: str):
+    """Yield a light-weight, streaming-style mock response for UI work."""
+
+    preview = (message[:80] + "…") if len(message) > 80 else message
+    yield "Frontend-only mode active. "
+    yield "Backend calls are skipped. "
+    yield f"You asked: {preview}"
+
+
 def build_response(message: str, session_id: str, persona: str | None = None):
     """Stream an answer using the vLLM streaming API, yielding tokens incrementally."""
+
+    if FRONTEND_DEV_MODE:
+        yield from mock_frontend_response(message)
+        return
 
     if not vllm_llm:
         raise RuntimeError(
@@ -446,7 +487,7 @@ def build_response(message: str, session_id: str, persona: str | None = None):
         )
 
     session_memory = get_session_memory(session_id)
-    docs = retriever.get_relevant_documents(message)
+    docs = retriever.get_relevant_documents(message) if retriever else []
     context = format_docs(docs) if docs else ""
     persona_block = f"Persona: {persona}\n" if persona else ""
     history_messages = session_memory.load_memory_variables({}).get("history", [])
