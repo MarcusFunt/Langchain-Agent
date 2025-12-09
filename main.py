@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import posthog
+from dotenv import load_dotenv
 from fastapi import Body, FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
@@ -26,6 +27,7 @@ from app.vector_store import build_vector_store
 # Silence telemetry calls that rely on networked analytics backends.
 posthog.capture = lambda *_, **__: None
 
+load_dotenv()
 chat_prompt = build_prompt()
 system_prompt = os.getenv("SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
 
