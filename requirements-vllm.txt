@@ -1,2 +1,0 @@
-# vLLM is mandatory for this project; this file mirrors the pin to aid tooling
-vllm

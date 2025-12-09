@@ -28,13 +28,12 @@ When the script finishes it will print the command to start the app. By default 
 - `.env` with sane defaults (edit it if you want different models or paths)
 
 ## Start the app
-Activate the environment, load the `.env`, and launch the FastAPI server:
+Activate the environment and launch the FastAPI server. The `.env` file is loaded automatically.
 
 - Linux/macOS (Bash):
 
   ```bash
   source .venv/bin/activate
-  set -a; source .env; set +a
   python main.py
   ```
 
@@ -42,11 +41,6 @@ Activate the environment, load the `.env`, and launch the FastAPI server:
 
   ```powershell
   .\.venv\Scripts\Activate.ps1
-  Get-Content .env | ForEach-Object {
-    if ($_ -match '^(.*)=(.*)$') {
-      Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
-    }
-  }
   python main.py
   ```
 
