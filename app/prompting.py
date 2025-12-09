@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain.schema import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
 
