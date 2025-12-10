@@ -9,3 +9,7 @@ fastapi
 uvicorn
 vllm
 python-dotenv
+pytest
+pytest-cov
+httpx
+respx

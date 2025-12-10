@@ -46,6 +46,13 @@ Activate the environment and launch the FastAPI server. The `.env` file is loade
 
 Open [http://localhost:8000](http://localhost:8000) to chat.
 
+## Running Tests
+To run the automated tests, use the following command:
+
+```bash
+./run_tests.sh
+```
+
 ### Frontend-only mode
 If you only need the UI while iterating on styles or layout, skip the heavy
 back-end dependencies by setting `FRONTEND_DEV_MODE=1` before launching the
