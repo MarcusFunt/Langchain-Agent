@@ -18,12 +18,13 @@ if (-not $pythonCmd) {
 }
 
 # Check Python version and capture Python path
-$versionOutput = & $pythonCmd.Source - <<'PY'
+$versionScript = @'
 import sys
 if sys.version_info < (3, 11):
     raise SystemExit("Python 3.11+ is required.")
 print(sys.executable)
-PY
+'@
+$versionOutput = & $pythonCmd.Source -c $versionScript
 $pythonPath = $versionOutput.Trim()
 
 # Create venv if missing
