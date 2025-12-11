@@ -26,6 +26,10 @@ When the script finishes the container will already be running. By default it cr
 - `chroma_db/` for persisted vectors
 - `.env` with sane defaults (edit it if you want different models or paths)
 
+If you leave `data/` empty, the app will pull the
+[`MuskumPillerum/General-Knowledge`](https://huggingface.co/datasets/MuskumPillerum/General-Knowledge)
+dataset so the Chroma store always has something to retrieve from.
+
 ## Start/stop and logs
 The installer starts the container automatically. Use Docker to control it afterward:
 
