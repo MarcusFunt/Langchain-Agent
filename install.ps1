@@ -47,8 +47,8 @@ docker run -d `
     --name $containerName `
     --env-file .env `
     -p 8000:8000 `
-    -v "$dataPath:/app/data" `
-    -v "$chromaPath:/app/chroma_db" `
+    -v "${dataPath}:/app/data" `
+    -v "${chromaPath}:/app/chroma_db" `
     $imageName | Out-Null
 
 Write-Host "`nLangchain-Agent is running in Docker at http://localhost:8000" -ForegroundColor Green
