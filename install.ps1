@@ -3,40 +3,16 @@ param()
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "Setting up Langchain-Agent for Windows..." -ForegroundColor Cyan
+Write-Host "Setting up Langchain-Agent in Docker for Windows..." -ForegroundColor Cyan
 
 # Verify Docker
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Write-Error "Docker is required to run this project. Please install Docker first." -ErrorAction Stop
 }
 
-# Resolve Python executable
-$pythonBin = if ($env:PYTHON) { $env:PYTHON } else { "python" }
-$pythonCmd = Get-Command $pythonBin -ErrorAction SilentlyContinue
-if (-not $pythonCmd) {
-    Write-Error "Python 3.11+ is required. Set the PYTHON environment variable to your Python path if needed." -ErrorAction Stop
-}
-
-# Check Python version and capture Python path
-$versionScript = @'
-import sys
-if sys.version_info < (3, 11):
-    raise SystemExit("Python 3.11+ is required.")
-print(sys.executable)
-'@
-$versionOutput = & $pythonCmd.Source -c $versionScript
-$pythonPath = $versionOutput.Trim()
-
-# Create venv if missing
-if (-not (Test-Path ".venv")) {
-    & $pythonPath -m venv .venv
-}
-
-$venvPython = Join-Path -Path ".venv" -ChildPath "Scripts/python.exe"
-
-# Upgrade pip and install deps
-& $venvPython -m pip install --upgrade pip
-& $venvPython -m pip install -r requirements.txt
+$imageName = "langchain-agent:latest"
+$containerName = "langchain-agent"
+$projectRoot = Get-Location
 
 # Prepare folders
 New-Item -ItemType Directory -Force -Path "data" | Out-Null
@@ -57,7 +33,24 @@ MEMORY_TOKEN_LIMIT=2048
     Write-Host "Wrote default .env. Update values if you want different models or paths."
 }
 
-Write-Host "`nEnvironment is ready. Activate with: .\\.venv\\Scripts\\Activate.ps1" -ForegroundColor Green
-Write-Host "Then start the app with:" -ForegroundColor Green
-Write-Host "  Get-Content .env | ForEach-Object { if ($_ -match '^(.*)=(.*)$') { Set-Item -Path \"Env:$($matches[1])\" -Value $matches[2] } }" -ForegroundColor DarkGray
-Write-Host "  python main.py" -ForegroundColor DarkGray
+Write-Host "Building Docker image..." -ForegroundColor Yellow
+docker build -t $imageName .
+
+Write-Host "Stopping any existing container named $containerName..." -ForegroundColor Yellow
+docker rm -f $containerName 2>$null | Out-Null
+
+$dataPath = (Resolve-Path "$($projectRoot.Path)\data").Path
+$chromaPath = (Resolve-Path "$($projectRoot.Path)\chroma_db").Path
+
+Write-Host "Starting container..." -ForegroundColor Yellow
+docker run -d `
+    --name $containerName `
+    --env-file .env `
+    -p 8000:8000 `
+    -v "$dataPath:/app/data" `
+    -v "$chromaPath:/app/chroma_db" `
+    $imageName | Out-Null
+
+Write-Host "`nLangchain-Agent is running in Docker at http://localhost:8000" -ForegroundColor Green
+Write-Host "To view logs: docker logs -f $containerName" -ForegroundColor DarkGray
+Write-Host "To stop the app: docker rm -f $containerName" -ForegroundColor DarkGray

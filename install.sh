@@ -1,36 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Simple installer to set up a local dev environment with vLLM-enabled FastAPI app.
+# Installer to build and launch the Langchain-Agent Docker container on Linux/macOS.
 # Usage: ./install.sh
-
-PYTHON_BIN="${PYTHON:-python3}"
 
 command -v docker >/dev/null 2>&1 || {
   echo "Docker is required to run this project. Please install Docker first." >&2
   exit 1
 }
 
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "Python 3.11+ is required. Set PYTHON=/path/to/python3.11 if needed." >&2
-  exit 1
-fi
-
-"$PYTHON_BIN" - <<'PY'
-import sys
-if sys.version_info < (3, 11):
-    print("Python 3.11+ is required.", file=sys.stderr)
-    sys.exit(1)
-PY
-
-if [ ! -d .venv ]; then
-  "$PYTHON_BIN" -m venv .venv
-fi
-
-# shellcheck disable=SC1091
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+PROJECT_ROOT="$(pwd)"
+IMAGE_NAME="langchain-agent:latest"
+CONTAINER_NAME="langchain-agent"
 
 mkdir -p data chroma_db
 
@@ -48,5 +29,21 @@ ENV
   echo "Wrote default .env. Update values if you want different models or paths."
 fi
 
-echo "\nEnvironment is ready. Activate with 'source .venv/bin/activate' and start the app with:\n"
-echo "  set -a; source .env; set +a; python main.py"
+echo "Building Docker image..."
+docker build -t "$IMAGE_NAME" .
+
+echo "Stopping any existing container named $CONTAINER_NAME..."
+docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+
+echo "Starting container..."
+docker run -d \
+  --name "$CONTAINER_NAME" \
+  --env-file .env \
+  -p 8000:8000 \
+  -v "$PROJECT_ROOT/data:/app/data" \
+  -v "$PROJECT_ROOT/chroma_db:/app/chroma_db" \
+  "$IMAGE_NAME"
+
+echo "\nLangchain-Agent is running in Docker at http://localhost:8000"
+echo "To view logs: docker logs -f $CONTAINER_NAME"
+echo "To stop the app: docker rm -f $CONTAINER_NAME"
