@@ -5,6 +5,7 @@ chromadb
 sentence-transformers
 pypdf
 openai
+datasets
 fastapi
 uvicorn
 vllm
